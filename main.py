@@ -1,33 +1,17 @@
 from fastapi import FastAPI
+from database import Base, engine
+from modules.students.routes import read_students
 
-# Import Routes dari masing-masing modul
-from modules.auth.routes import login
-from modules.students.routes import createStudent, readStudent, updateStudent, deleteStudent
-from modules.activity_logs.routes import createLog, readLog
+# Buat tabel di database jika belum ada
+Base.metadata.create_all(bind=engine)
 
-app = FastAPI(
-    title="E-Learning Activity Tracker API",
-    description="Project 3: Project 3: E-Learning Activity Tracker",
-    version="1.0.0"
-)
+# --- BAGIAN PENTING (JANGAN DIHAPUS) ---
+app = FastAPI()
+# ---------------------------------------
 
-# 1. Register Auth Routes
-app.include_router(login.router, prefix="/auth", tags=["Authentication"])
-
-# 2. Register Student Routes (CRUD Terpisah)
-app.include_router(createStudent.router, prefix="/students", tags=["Students"])
-app.include_router(readStudent.router, prefix="/students", tags=["Students"])
-app.include_router(updateStudent.router, prefix="/students", tags=["Students"])
-app.include_router(deleteStudent.router, prefix="/students", tags=["Students"])
-
-# 3. Register Activity/Logs Routes (Termasuk Analisis)
-app.include_router(createLog.router, prefix="/activities", tags=["Activities"])
-app.include_router(readLog.router, prefix="/activities", tags=["Activities & Analytics"])
+# Hubungkan route siswa ke aplikasi utama
+app.include_router(read_students.router)
 
 @app.get("/")
 def root():
-    return {"message": "E-Learning API is running. Go to /docs for Swagger UI."}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    return {"message": "Server Berjalan! Buka http://127.0.0.1:8000/docs untuk tes API."}

@@ -1,22 +1,24 @@
-from pydantic import BaseModel, EmailStr
-from typing import Optional
+from pydantic import BaseModel
+from typing import Optional, Any
 
+# Sesuaikan schema dengan Model baru
 class StudentBase(BaseModel):
-    nim: str
-    name: str
-    email: EmailStr
+    student_id_csv: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    gender: Optional[str] = None
+    department: Optional[str] = None
+    parent_education: Optional[str] = None
+    total_score: Optional[float] = None
+    grade: Optional[str] = None
 
-class StudentCreate(StudentBase):
-    password: str
-
-class StudentUpdate(BaseModel):
-    name: Optional[str] = None
-    email: Optional[EmailStr] = None
-
-# PERHATIKAN BAGIAN INI
-class StudentResponse(StudentBase):
-    student_id: int  # <--- Pastikan ini student_id, BUKAN id
-    role: str
-    
+class Student(StudentBase):
+    id: int
     class Config:
         from_attributes = True
+
+class ResponseModel(BaseModel):
+    success: bool
+    message: str
+    data: Any
