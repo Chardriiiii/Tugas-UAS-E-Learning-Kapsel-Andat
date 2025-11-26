@@ -1,40 +1,32 @@
 import pandas as pd
 import os
 import sys
+from config.database import get_db_connection
 
-# Trik agar bisa import file database.py di folder yang sama
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-import database 
-
-# Lokasi file CSV (naik satu folder dari src, lalu masuk assets)
+# Setup lokasi file CSV
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_FILE_PATH = os.path.join(BASE_DIR, 'assets', 'Students Performance Dataset.csv')
 
 def seed_data():
-    print("🚀 Memulai proses seeding...")
+    print("🚀 Memulai proses seeding data LENGKAP...")
     
-    # Cek koneksi database dulu
-    try:
-        conn = database.get_db_connection()
-        cursor = conn.cursor()
-        print("✅ Koneksi database berhasil.")
-    except Exception as e:
-        print(f"❌ Gagal koneksi database: {e}")
-        return
+    conn = get_db_connection()
+    if not conn: return
+    cursor = conn.cursor()
 
-    # Baca CSV
     if not os.path.exists(CSV_FILE_PATH):
-        print(f"❌ File CSV tidak ditemukan di: {CSV_FILE_PATH}")
+        print("❌ File CSV tidak ditemukan di folder assets.")
         return
 
     try:
-        df = pd.read_csv(CSV_FILE_PATH)
-        # Ubah NaN (kosong) menjadi None agar dianggap NULL oleh MySQL
-        df = df.where(pd.notnull(df), None)
+        # Bersihkan data lama
+        cursor.execute("TRUNCATE TABLE students_performance")
         
-        print(f"📂 Berhasil membaca {len(df)} baris data.")
+        # Baca CSV
+        df = pd.read_csv(CSV_FILE_PATH)
+        df = df.where(pd.notnull(df), None) # Handle data kosong
 
-        # Query SQL
+        # Insert Query untuk 23 Kolom
         sql = """
             INSERT INTO students_performance 
             (Student_ID, First_Name, Last_Name, Email, Gender, Age, Department, Attendance, 
@@ -45,7 +37,6 @@ def seed_data():
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
-        # Konversi Dataframe ke List of Tuples untuk Insert
         val_list = []
         for _, row in df.iterrows():
             val_list.append((
@@ -58,15 +49,12 @@ def seed_data():
                 row['Family_Income_Level'], row['Stress_Level (1-10)'], row['Sleep_Hours_per_Night']
             ))
 
-        # Eksekusi Batch (Cepat)
         cursor.executemany(sql, val_list)
         conn.commit()
-        
-        print(f"🎉 SUKSES! {cursor.rowcount} data telah masuk ke database.")
+        print(f"🎉 SUKSES! {cursor.rowcount} data lengkap berhasil disimpan.")
 
     except Exception as err:
-        print(f"❌ Terjadi Error saat insert: {err}")
-    
+        print(f"❌ Error Seeding: {err}")
     finally:
         cursor.close()
         conn.close()
