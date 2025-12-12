@@ -43,7 +43,7 @@ class StudentResponse(StudentBase):
     grade: Optional[str] = None
     
     class Config:
-        from_attributes = True  # <--- UPDATE DISINI (V2)
+        from_attributes = True  
 
 # --- Routes ---
 @router.get("/", response_model=List[StudentResponse])
