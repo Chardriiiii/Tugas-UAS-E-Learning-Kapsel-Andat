@@ -1,4 +1,5 @@
 import pandas as pd
+import random
 from sqlalchemy import create_engine, text
 from database import engine, Base, SessionLocal
 
@@ -15,7 +16,6 @@ except ImportError as e:
 csv_file_path = 'data/Students Performance Dataset.csv'
 table_name = 'student_scores'
 
-# 1. UPDATE: Menambahkan Engineering
 DEFAULT_COURSES_WITH_ACTIVITIES = [
     {
         "course_name": "Calculus 1",
@@ -49,7 +49,7 @@ DEFAULT_COURSES_WITH_ACTIVITIES = [
     },
     {
         "course_name": "Physics 101", 
-        "department": "Engineering", # <-- Ini penting agar siswa Engineering masuk
+        "department": "Engineering",
         "credits": 4,
         "activities": [
             {"name": "Lab: Newton's Laws", "type": "Lab"},
@@ -58,6 +58,14 @@ DEFAULT_COURSES_WITH_ACTIVITIES = [
         ]
     },
 ]
+
+# Helper: Tentukan Grade berdasarkan Score
+def calculate_grade(score):
+    if score >= 85: return "A"
+    elif score >= 70: return "B"
+    elif score >= 55: return "C"
+    elif score >= 40: return "D"
+    return "E"
 
 def fix_database_and_import():
     try:
@@ -76,24 +84,18 @@ def fix_database_and_import():
         Base.metadata.create_all(bind=engine)
         db = SessionLocal()
 
-        # 1. ISI COURSES & ACTIVITIES SEKALIGUS
+        # 1. ISI COURSES & ACTIVITIES
         print("🏗️  Membuat Courses dan Default Activities...")
         course_map = {} 
         
         for data in DEFAULT_COURSES_WITH_ACTIVITIES:
-            # Pisahkan data activities dari data course agar tidak error saat masuk ke CourseModel
             activities_data = data.pop("activities") 
-            
-            # Buat Course
             new_course = CourseModel(**data) 
             db.add(new_course)
             db.commit()
             db.refresh(new_course)
-            
-            # Simpan ID untuk keperluan enroll nanti
             course_map[new_course.department] = new_course.id 
             
-            # Buat Activities untuk Course ini
             for act in activities_data:
                 new_activity = ActivityModel(
                     name=act["name"],
@@ -101,13 +103,13 @@ def fix_database_and_import():
                     course_id=new_course.id
                 )
                 db.add(new_activity)
-        
         db.commit()
 
-        # 3. IMPORT MAHASISWA
-        print(f"📂 Import Mahasiswa...")
+        # 3. IMPORT MAHASISWA & SIMULASI DATA
+        print(f"📂 Import Mahasiswa & Generating Mock Data...")
         df = pd.read_csv(csv_file_path)
         
+        # Cleaning Data Standard
         df.columns = [c.strip().replace(' ', '_').replace('(', '').replace(')', '').replace('%', '').lower() for c in df.columns]
         cols_drop = ['email', 'parent_education_level', 'family_income_level', 'sleep_hours_per_night']
         df.drop(columns=[c for c in cols_drop if c in df.columns], inplace=True)
@@ -116,23 +118,67 @@ def fix_database_and_import():
             df['full_name'] = df['first_name'] + ' ' + df['last_name']
             df.drop(columns=['first_name', 'last_name'], inplace=True)
 
+        # --- LOGIKA BARU: SIMULASI CAMPURAN (MIXED DATA) ---
+        # Kita akan memanipulasi dataframe sebelum masuk DB
+        
+        for index, row in df.iterrows():
+            # 40% Peluang Mahasiswa sudah Lulus (Completed)
+            is_graduated = random.random() < 0.4 
+            
+            if is_graduated:
+                # Generate Nilai Acak yang Masuk Akal (50 - 100)
+                simulated_score = round(random.uniform(50, 100), 2)
+                simulated_grade = calculate_grade(simulated_score)
+                
+                df.at[index, 'total_score'] = simulated_score
+                df.at[index, 'grade'] = simulated_grade
+                df.at[index, 'attendance_'] = round(random.uniform(75, 100), 2)
+            else:
+                # 60% Mahasiswa Masih Baru (In Progress)
+                df.at[index, 'total_score'] = 0.0
+                df.at[index, 'grade'] = None # Akan jadi 'In Progress' di API
+                df.at[index, 'attendance_'] = 0.0
+
+        # Simpan Student Profile ke DB
         df.to_sql(name=table_name, con=engine, if_exists='replace', index=False)
 
-        # 4. AUTO ENROLL
-        print("   -> Auto Enroll Mahasiswa...")
+        # 4. AUTO ENROLL & SYNC STATUS
+        print("   -> Auto Enroll & Sync Progress...")
         students = db.query(StudentModel).all()
         enrollments = []
+        
         for s in students:
             if s.department in course_map:
                 c_id = course_map[s.department]
-                enrollments.append(EnrollmentModel(student_id=s.student_id, course_id=c_id, progress=0.0))
+                
+                # Cek Profile Mahasiswa tadi, apakah dia 'graduated' atau tidak?
+                # Jika grade ada isinya (A/B/C), berarti completed
+                if s.grade is not None:
+                    enrollments.append(EnrollmentModel(
+                        student_id=s.student_id, 
+                        course_id=c_id, 
+                        progress=100.0,           # Full
+                        is_completed=True,        # Selesai
+                        final_score=s.total_score, # Ambil nilai simulasi
+                        grade=s.grade             # Ambil grade simulasi
+                    ))
+                else:
+                    # Jika grade None, berarti mahasiswa baru
+                    enrollments.append(EnrollmentModel(
+                        student_id=s.student_id, 
+                        course_id=c_id, 
+                        progress=0.0,             # Nol
+                        is_completed=False,
+                        final_score=None,
+                        grade=None
+                    ))
         
         if enrollments:
             db.add_all(enrollments)
             db.commit()
 
         db.close()
-        print("🎉 Database Siap! Engineering Department sudah ditambahkan.")
+        print("🎉 Database Siap! Data sudah dicampur (40% Completed, 60% In Progress) agar terlihat realistis.")
 
     except Exception as e:
         print(f"❌ Error: {e}")
