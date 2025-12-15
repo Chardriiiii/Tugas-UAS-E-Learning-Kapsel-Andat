@@ -96,22 +96,3 @@ def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends
 @router.get("/{student_id}/my-learning", response_model=List[EnrollResponse])
 def get_my_learning(student_id: str, db: Session = Depends(get_db)):
     return db.query(EnrollmentModel).filter(EnrollmentModel.student_id == student_id).all()
-
-# --- FITUR DROP COURSE (DELETE) ---
-@router.delete("/enrollments/{enrollment_id}")
-def drop_course(enrollment_id: int, db: Session = Depends(get_db)):
-    # 1. Cari data enrollment berdasarkan enrollment_id
-    enrollment = db.query(EnrollmentModel).filter(EnrollmentModel.enrollment_id == enrollment_id).first()
-
-    # 2. Jika tidak ketemu, beri error 404
-    if not enrollment:
-        raise HTTPException(status_code=404, detail="Enrollment ID not found")
-
-    # 3. Hapus data dari database
-    try:
-        db.delete(enrollment)
-        db.commit()
-        return {"status": "success", "message": "Course dropped successfully"}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
