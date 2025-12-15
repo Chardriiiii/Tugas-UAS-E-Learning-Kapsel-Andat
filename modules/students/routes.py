@@ -141,4 +141,4 @@ def drop_course(enrollment_id: int, db: Session = Depends(get_db)):
         return {"status": "success", "message": "Course dropped successfully"}
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))git
+        raise HTTPException(status_code=500, detail=str(e))
