@@ -15,26 +15,55 @@ except ImportError as e:
 csv_file_path = 'data/Students Performance Dataset.csv'
 table_name = 'student_scores'
 
-DEFAULT_COURSES = [
-    {"course_name": "Calculus 1", "department": "Mathematics", "credits": 4},
-    {"course_name": "Data Structures", "department": "CS", "credits": 4},
-    {"course_name": "Macroeconomics", "department": "Business", "credits": 3},
-]
-
-DEFAULT_ACTIVITIES = [
-    # Calculus
-    {"name": "Video: Intro to Limits", "type": "Video", "course_id": 1},
-    {"name": "Quiz: Derivatives", "type": "Quiz", "course_id": 1},
-    # CS
-    {"name": "Video: Linked Lists", "type": "Video", "course_id": 2},
-    {"name": "Forum: Big O Notation", "type": "Forum", "course_id": 2},
+# 1. UPDATE: Menambahkan Engineering
+DEFAULT_COURSES_WITH_ACTIVITIES = [
+    {
+        "course_name": "Calculus 1",
+        "department": "Mathematics",
+        "credits": 4,
+        "activities": [
+            {"name": "Video: Introduction to Limits", "type": "Video"},
+            {"name": "Quiz: Derivatives Basic", "type": "Quiz"},
+            {"name": "Midterm Exam: Integration", "type": "Exam"}
+        ]
+    },
+    {
+        "course_name": "Data Structures",
+        "department": "CS",
+        "credits": 4,
+        "activities": [
+            {"name": "Video: Linked Lists vs Arrays", "type": "Video"},
+            {"name": "Assignment: Build a Binary Tree", "type": "Assignment"},
+            {"name": "Forum: Big O Notation Discussion", "type": "Forum"}
+        ]
+    },
+    {
+        "course_name": "Macroeconomics",
+        "department": "Business",
+        "credits": 3,
+        "activities": [
+            {"name": "Lecture: Supply and Demand", "type": "Lecture"},
+            {"name": "Case Study: Market Failures", "type": "Assignment"},
+            {"name": "Quiz: Fiscal Policy", "type": "Quiz"}
+        ]
+    },
+    {
+        "course_name": "Physics 101", 
+        "department": "Engineering", # <-- Ini penting agar siswa Engineering masuk
+        "credits": 4,
+        "activities": [
+            {"name": "Lab: Newton's Laws", "type": "Lab"},
+            {"name": "Simulation: Projectile Motion", "type": "Interactive"},
+            {"name": "Final Project: Bridge Design", "type": "Project"}
+        ]
+    },
 ]
 
 def fix_database_and_import():
     try:
         print("🔄 Menghubungkan ke MySQL...")
         with engine.connect() as conn:
-            # RESET TOTAL
+            # RESET DB
             conn.execute(text("DROP TABLE IF EXISTS certificates"))
             conn.execute(text("DROP TABLE IF EXISTS enrollments"))
             conn.execute(text("DROP TABLE IF EXISTS interaction_logs"))
@@ -47,25 +76,38 @@ def fix_database_and_import():
         Base.metadata.create_all(bind=engine)
         db = SessionLocal()
 
-        # 1. ISI COURSES
-        course_map = {}
-        for c in DEFAULT_COURSES:
-            new_c = CourseModel(**c)
-            db.add(new_c)
+        # 1. ISI COURSES & ACTIVITIES SEKALIGUS
+        print("🏗️  Membuat Courses dan Default Activities...")
+        course_map = {} 
+        
+        for data in DEFAULT_COURSES_WITH_ACTIVITIES:
+            # Pisahkan data activities dari data course agar tidak error saat masuk ke CourseModel
+            activities_data = data.pop("activities") 
+            
+            # Buat Course
+            new_course = CourseModel(**data) 
+            db.add(new_course)
             db.commit()
-            db.refresh(new_c)
-            course_map[new_c.department] = new_c.id 
-
-        # 2. ISI ACTIVITIES
-        for a in DEFAULT_ACTIVITIES:
-            db.add(ActivityModel(**a))
+            db.refresh(new_course)
+            
+            # Simpan ID untuk keperluan enroll nanti
+            course_map[new_course.department] = new_course.id 
+            
+            # Buat Activities untuk Course ini
+            for act in activities_data:
+                new_activity = ActivityModel(
+                    name=act["name"],
+                    type=act["type"],
+                    course_id=new_course.id
+                )
+                db.add(new_activity)
+        
         db.commit()
 
         # 3. IMPORT MAHASISWA
         print(f"📂 Import Mahasiswa...")
         df = pd.read_csv(csv_file_path)
         
-        # Cleaning Data
         df.columns = [c.strip().replace(' ', '_').replace('(', '').replace(')', '').replace('%', '').lower() for c in df.columns]
         cols_drop = ['email', 'parent_education_level', 'family_income_level', 'sleep_hours_per_night']
         df.drop(columns=[c for c in cols_drop if c in df.columns], inplace=True)
@@ -83,7 +125,6 @@ def fix_database_and_import():
         for s in students:
             if s.department in course_map:
                 c_id = course_map[s.department]
-                # Default Progress 0
                 enrollments.append(EnrollmentModel(student_id=s.student_id, course_id=c_id, progress=0.0))
         
         if enrollments:
@@ -91,7 +132,7 @@ def fix_database_and_import():
             db.commit()
 
         db.close()
-        print("🎉 Database Siap! Fitur Progress Tracking sudah aktif.")
+        print("🎉 Database Siap! Engineering Department sudah ditambahkan.")
 
     except Exception as e:
         print(f"❌ Error: {e}")

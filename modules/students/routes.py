@@ -1,19 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey
-from pydantic import BaseModel
+from pydantic import BaseModel, Field # Pastikan import Field ada
 from typing import List, Optional
 from datetime import datetime
 from database import get_db, Base, engine
 
-# Import CourseModel untuk validasi
 from modules.courses.routes import CourseModel
 
 router = APIRouter()
 
 # --- MODEL DATABASE ---
-
-# Model Mahasiswa
 class StudentModel(Base):
     __tablename__ = "student_scores"
     student_id = Column(String(50), primary_key=True, index=True) 
@@ -25,16 +22,12 @@ class StudentModel(Base):
     total_score = Column(Float)
     grade = Column(String(5))
 
-# Model Enrollment (UPDATE: Tambah Progress)
 class EnrollmentModel(Base):
     __tablename__ = "enrollments"
-    
-    id = Column(Integer, primary_key=True, index=True)
+    enrollment_id = Column(Integer, primary_key=True, index=True)
     student_id = Column(String(50), index=True)
     course_id = Column(Integer, index=True)
     semester = Column(String(20), default="Ganjil 2025")
-    
-    # KOLOM BARU (Penyebab Error Anda tadi)
     progress = Column(Float, default=0.0)      
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime, nullable=True)
@@ -48,9 +41,6 @@ class StudentBase(BaseModel):
     age: int
     department: str
 
-class StudentCreate(StudentBase):
-    student_id: str
-
 class StudentResponse(StudentBase):
     student_id: str
     grade: Optional[str] = None
@@ -61,7 +51,9 @@ class EnrollRequest(BaseModel):
     course_id: int
 
 class EnrollResponse(BaseModel):
-    id: int
+    # UPDATE: Menggunakan alias 'enrollment_id'
+    enrollment_id: int = Field(serialization_alias="enrollment_id")
+    
     student_id: str
     course_id: int
     progress: float
@@ -81,7 +73,6 @@ def read_student(student_id: str, db: Session = Depends(get_db)):
     if not student: raise HTTPException(status_code=404, detail="Student not found")
     return student
 
-# ENROLL COURSE
 @router.post("/{student_id}/enroll", response_model=EnrollResponse)
 def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends(get_db)):
     student = db.query(StudentModel).filter(StudentModel.student_id == student_id).first()
@@ -96,14 +87,12 @@ def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends
     
     if existing: raise HTTPException(status_code=400, detail="Sudah terdaftar.")
 
-    # Default progress 0.0
     new_enroll = EnrollmentModel(student_id=student_id, course_id=request.course_id, progress=0.0)
     db.add(new_enroll)
     db.commit()
     db.refresh(new_enroll)
     return new_enroll
 
-# LIHAT PROGRESS KULIAH SAYA
 @router.get("/{student_id}/my-learning", response_model=List[EnrollResponse])
 def get_my_learning(student_id: str, db: Session = Depends(get_db)):
     return db.query(EnrollmentModel).filter(EnrollmentModel.student_id == student_id).all()
