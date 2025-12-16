@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import Column, Integer, String, or_
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict
 from database import get_db, Base, engine
 
 router = APIRouter()
@@ -19,19 +19,32 @@ Base.metadata.create_all(bind=engine)
 class CourseBase(BaseModel):
     course_name: str
     department: Optional[str] = None
-    credits: int = 3
+    credits: int = Field(..., ge=2, le=6)
 
 class CourseResponse(CourseBase):
     id: int = Field(serialization_alias="course_id")
     class Config:
         from_attributes = True
 
-@router.get("/", response_model=List[CourseResponse])
+@router.get("/", response_model=Dict[str, List[CourseResponse]])
 def read_courses(department: Optional[str] = None, db: Session = Depends(get_db)):
     query = db.query(CourseModel)
+    
     if department:
-        query = query.filter(or_(CourseModel.department == department, CourseModel.department == "General"))
-    return query.all()
+        query = query.filter(CourseModel.department == department)
+        
+    courses = query.all()
+    
+    grouped_courses = {}
+    for course in courses:
+        dept_name = course.department.title() if course.department else "General"
+        
+        if dept_name not in grouped_courses:
+            grouped_courses[dept_name] = []
+            
+        grouped_courses[dept_name].append(course)
+        
+    return grouped_courses
 
 @router.post("/", response_model=CourseResponse)
 def create_course(course: CourseBase, db: Session = Depends(get_db), x_role: str = Header(default="student")):
