@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey
-from pydantic import BaseModel, Field, field_validator # <-- Tambah field_validator
-from typing import List, Optional, Union
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, func # <--- TAMBAH func
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional
 from datetime import datetime
 from database import get_db, Base, engine
 
@@ -10,7 +10,10 @@ from modules.courses.routes import CourseModel
 
 router = APIRouter()
 
-# --- MODEL DATABASE ---
+# ==============================
+# 1. MODEL DATABASE
+# ==============================
+
 class StudentModel(Base):
     __tablename__ = "student_scores"
     student_id = Column(String(50), primary_key=True, index=True) 
@@ -20,8 +23,6 @@ class StudentModel(Base):
     department = Column(String(100))
     attendance_ = Column(Float)
     total_score = Column(Float)
-    
-    # Boleh Null (None) di Database
     grade = Column(String(50), nullable=True) 
 
 class EnrollmentModel(Base):
@@ -33,34 +34,14 @@ class EnrollmentModel(Base):
     progress = Column(Float, default=0.0)      
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime, nullable=True)
-    
-    # Kolom Nilai Akhir Mata Kuliah
     final_score = Column(Float, nullable=True) 
-    grade = Column(String(50), nullable=True) # A, B, C, atau In Progress
+    grade = Column(String(50), nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
-# --- SCHEMAS ---
-class StudentBase(BaseModel):
-    full_name: str
-    gender: str
-    age: int
-    department: str
-
-class StudentResponse(StudentBase):
-    student_id: str
-    # Grade bisa string panjang sekarang ("In Progress...")
-    grade: Optional[str] = None 
-    
-    # VALIDATOR: Mengubah tampilan Grade jika None
-    @field_validator('grade', mode='before')
-    def set_grade_message(cls, v):
-        if v is None:
-            return "In Progress (Semester Baru)"
-        return v
-
-    class Config:
-        from_attributes = True
+# ==============================
+# 2. SCHEMAS
+# ==============================
 
 class EnrollRequest(BaseModel):
     course_id: int
@@ -71,15 +52,11 @@ class EnrollResponse(BaseModel):
     course_id: int
     progress: float
     is_completed: bool
-    
-    # Tambahan: Grade per mata kuliah
     grade: Optional[str] = None
     final_score: Optional[float] = None
 
-    # VALIDATOR: Logika "Message Tertentu"
     @field_validator('grade', mode='before')
     def set_course_status_message(cls, v, info):
-        # Jika grade kosong/None, beri pesan informatif
         if v is None:
             return "Course in Progress (Not Completed)"
         return v
@@ -87,48 +64,106 @@ class EnrollResponse(BaseModel):
     class Config:
         from_attributes = True
 
-# --- ROUTES ---
+class StudentBase(BaseModel):
+    full_name: str
+    gender: str
+    age: int
+    department: str
+
+class StudentCreate(StudentBase):
+    student_id: str
+
+class StudentResponse(StudentBase):
+    student_id: str
+    grade: Optional[str] = None
+    enrollments: List[EnrollResponse] = [] 
+
+    @field_validator('grade', mode='before')
+    def set_grade_message(cls, v):
+        if v is None:
+            return "In Progress (Semester Baru)"
+        return v
+
+    class Config:
+        from_attributes = True
+
+# ==============================
+# 3. ROUTES
+# ==============================
 
 @router.get("/", response_model=List[StudentResponse])
 def read_students(skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
-    return db.query(StudentModel).offset(skip).limit(limit).all()
+    students = db.query(StudentModel).offset(skip).limit(limit).all()
+    results = []
+    for s in students:
+        s_dict = StudentResponse.model_validate(s)
+        s_dict.enrollments = db.query(EnrollmentModel).filter(EnrollmentModel.student_id == s.student_id).all()
+        results.append(s_dict)
+    return results
 
 @router.get("/{student_id}", response_model=StudentResponse)
 def read_student(student_id: str, db: Session = Depends(get_db)):
     student = db.query(StudentModel).filter(StudentModel.student_id == student_id).first()
-    if not student: raise HTTPException(status_code=404, detail="Student not found")
-    return student
+    if not student: 
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    my_enrollments = db.query(EnrollmentModel).filter(EnrollmentModel.student_id == student_id).all()
+    response = StudentResponse.model_validate(student)
+    response.enrollments = my_enrollments
+    return response
 
+# --- UPDATE PENTING DI SINI ---
 @router.post("/{student_id}/enroll", response_model=EnrollResponse)
 def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends(get_db)):
+    # 1. Cek Mahasiswa
     student = db.query(StudentModel).filter(StudentModel.student_id == student_id).first()
     if not student: raise HTTPException(status_code=404, detail="Mahasiswa tidak ditemukan")
     
+    # 2. Cek Matkul
     course = db.query(CourseModel).filter(CourseModel.id == request.course_id).first()
     if not course: raise HTTPException(status_code=404, detail="Mata kuliah tidak ditemukan")
 
+    # 3. Cek Duplikasi
     existing = db.query(EnrollmentModel).filter(
         EnrollmentModel.student_id == student_id, EnrollmentModel.course_id == request.course_id
     ).first()
-    
-    if existing: raise HTTPException(status_code=400, detail="Sudah terdaftar.")
+    if existing: raise HTTPException(status_code=400, detail="Sudah terdaftar di mata kuliah ini.")
 
+    # ---------------------------------------------------------
+    # 4. LOGIKA BARU: VALIDASI SKS (MAX 24)
+    # ---------------------------------------------------------
+    
+    # Hitung total SKS yang SUDAH diambil di semester ini ("Ganjil 2025")
+    # Kita melakukan JOIN antara tabel Enrollment dan Course untuk menjumlahkan credits
+    current_credits = db.query(func.sum(CourseModel.credits))\
+        .join(EnrollmentModel, CourseModel.id == EnrollmentModel.course_id)\
+        .filter(
+            EnrollmentModel.student_id == student_id,
+            EnrollmentModel.semester == "Ganjil 2025" # Sesuaikan jika semester dinamis
+        ).scalar() or 0 # Jika belum ada matkul, return 0
+    
+    projected_credits = current_credits + course.credits
+
+    if projected_credits > 24:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Gagal Enroll: Batas SKS terlampaui (Max 24). Total Anda: {current_credits}, Ditambah: {course.credits} = {projected_credits}."
+        )
+
+    # ---------------------------------------------------------
+
+    # 5. Simpan Enrollment
     new_enroll = EnrollmentModel(
         student_id=student_id, 
         course_id=request.course_id, 
         progress=0.0,
-        grade=None # Grade awal kosong
+        grade=None 
     )
     db.add(new_enroll)
     db.commit()
     db.refresh(new_enroll)
     return new_enroll
 
-@router.get("/{student_id}/my-learning", response_model=List[EnrollResponse])
-def get_my_learning(student_id: str, db: Session = Depends(get_db)):
-    return db.query(EnrollmentModel).filter(EnrollmentModel.student_id == student_id).all()
-
-# --- DROP COURSE ---
 @router.delete("/enrollments/{enrollment_id}")
 def drop_course(enrollment_id: int, db: Session = Depends(get_db)):
     enrollment = db.query(EnrollmentModel).filter(EnrollmentModel.enrollment_id == enrollment_id).first()
