@@ -1,138 +1,187 @@
 import pandas as pd
-import sys
-import os
-from sqlalchemy import create_engine, Column, Integer, String, Float
-from sqlalchemy.orm import sessionmaker, declarative_base
-from dotenv import load_dotenv
+import random
+from sqlalchemy import create_engine, text
+from database import engine, Base, SessionLocal
 
-# --- 1. SETUP DATABASE & MODEL (LANGSUNG DI SINI) ---
-print("--- MULAI SCRIPT IMPORT (VERSI ANTI-GAGAL) ---")
-
-load_dotenv() # Baca .env
-
-# Pastikan settingan database dibaca
-db_user = os.getenv('DB_USER')
-db_pass = os.getenv('DB_PASSWORD')
-db_host = os.getenv('DB_HOST')
-db_port = os.getenv('DB_PORT')
-db_name = os.getenv('DB_NAME')
-
-if not db_name:
-    print("❌ ERROR: File .env tidak terbaca atau kosong. Pastikan file .env ada.")
-    sys.exit(1)
-
-# Buat koneksi
-DATABASE_URL = f"mysql+pymysql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-# Definisi Tabel (Kita tulis ulang disini biar pasti terbaca)
-class StudentModel(Base):
-    __tablename__ = "students_performance"
-
-    id = Column(Integer, primary_key=True, index=True)
-    student_id_csv = Column(String(50), index=True)
-    first_name = Column(String(100))
-    last_name = Column(String(100))
-    email = Column(String(150))
-    gender = Column(String(20), index=True)
-    age = Column(Integer)
-    department = Column(String(100), index=True)
-    attendance_pct = Column(Float)
-    midterm_score = Column(Float)
-    final_score = Column(Float)
-    assignments_avg = Column(Float)
-    quizzes_avg = Column(Float)
-    participation_score = Column(Float)
-    projects_score = Column(Float)
-    total_score = Column(Float, index=True)
-    grade = Column(String(5), index=True)
-    study_hours_week = Column(Float)
-    extracurricular = Column(String(100))
-    internet_access = Column(String(10))
-    parent_education = Column(String(100))
-    family_income = Column(String(100))
-    stress_level = Column(Integer)
-    sleep_hours_night = Column(Float)
-
-# --- 2. PAKSA BUAT TABEL ---
+# --- IMPORT MODELS ---
 try:
-    print(f"Target Database: {db_name}")
-    print("Mereset tabel lama & membuat baru...")
-    Base.metadata.drop_all(bind=engine)   # Hapus tabel lama (jika ada sisa error)
-    Base.metadata.create_all(bind=engine) # Buat tabel baru
-    print("✅ Tabel 'students_performance' BERHASIL dibuat!")
-except Exception as e:
-    print(f"❌ GAGAL KONEKSI KE DATABASE: {e}")
-    print("Tips: Cek apakah XAMPP (MySQL) sudah nyala? Cek isi file .env?")
-    sys.exit(1)
+    from modules.courses.routes import CourseModel
+    from modules.activities.routes import ActivityModel 
+    from modules.interaction_logs.routes import InteractionLogModel
+    from modules.students.routes import StudentModel, EnrollmentModel
+except ImportError as e:
+    print(f"⚠️ Note: {e}")
 
-# --- 3. BACA CSV & IMPORT ---
-csv_file = "Students Performance Dataset.csv"
+# --- KONFIGURASI ---
+csv_file_path = 'data/Students Performance Dataset.csv'
+table_name = 'student_scores'
 
-def safe_float(val):
+DEFAULT_COURSES_WITH_ACTIVITIES = [
+    {
+        "course_name": "Calculus 1",
+        "department": "Mathematics",
+        "credits": 4,
+        "activities": [
+            {"name": "Video: Introduction to Limits", "type": "Video"},
+            {"name": "Quiz: Derivatives Basic", "type": "Quiz"},
+            {"name": "Midterm Exam: Integration", "type": "Exam"}
+        ]
+    },
+    {
+        "course_name": "Data Structures",
+        "department": "CS",
+        "credits": 4,
+        "activities": [
+            {"name": "Video: Linked Lists vs Arrays", "type": "Video"},
+            {"name": "Assignment: Build a Binary Tree", "type": "Assignment"},
+            {"name": "Forum: Big O Notation Discussion", "type": "Forum"}
+        ]
+    },
+    {
+        "course_name": "Macroeconomics",
+        "department": "Business",
+        "credits": 3,
+        "activities": [
+            {"name": "Lecture: Supply and Demand", "type": "Lecture"},
+            {"name": "Case Study: Market Failures", "type": "Assignment"},
+            {"name": "Quiz: Fiscal Policy", "type": "Quiz"}
+        ]
+    },
+    {
+        "course_name": "Physics 101", 
+        "department": "Engineering",
+        "credits": 4,
+        "activities": [
+            {"name": "Lab: Newton's Laws", "type": "Lab"},
+            {"name": "Simulation: Projectile Motion", "type": "Interactive"},
+            {"name": "Final Project: Bridge Design", "type": "Project"}
+        ]
+    },
+]
+
+# Helper: Tentukan Grade berdasarkan Score
+def calculate_grade(score):
+    if score >= 85: return "A"
+    elif score >= 70: return "B"
+    elif score >= 55: return "C"
+    elif score >= 40: return "D"
+    return "E"
+
+def fix_database_and_import():
     try:
-        return float(val) if val is not None else 0.0
-    except:
-        return 0.0
+        print("🔄 Menghubungkan ke MySQL...")
+        with engine.connect() as conn:
+            # RESET DB
+            conn.execute(text("DROP TABLE IF EXISTS certificates"))
+            conn.execute(text("DROP TABLE IF EXISTS enrollments"))
+            conn.execute(text("DROP TABLE IF EXISTS interaction_logs"))
+            conn.execute(text("DROP TABLE IF EXISTS activity_logs"))
+            conn.execute(text("DROP TABLE IF EXISTS activities"))
+            conn.execute(text("DROP TABLE IF EXISTS courses"))
+            conn.commit()
 
-def safe_int(val):
-    try:
-        return int(val) if val is not None else 0
-    except:
-        return 0
+        print("🏗️  Membuat tabel baru...")
+        Base.metadata.create_all(bind=engine)
+        db = SessionLocal()
 
-try:
-    df = pd.read_csv(csv_file)
-    print(f"✅ Membaca CSV: {len(df)} baris data.")
-    
-    df.columns = df.columns.str.strip()
-    df = df.where(pd.notnull(df), None)
-
-    db = SessionLocal()
-    count = 0
-    print("⏳ Sedang memasukkan data...")
-
-    for index, row in df.iterrows():
-        student = StudentModel(
-            student_id_csv = str(row['Student_ID']),
-            first_name = row['First_Name'],
-            last_name = row['Last_Name'],
-            email = row['Email'],
-            gender = row['Gender'],
-            age = safe_int(row['Age']),
-            department = row['Department'],
-            attendance_pct = safe_float(row['Attendance (%)']), 
-            midterm_score = safe_float(row['Midterm_Score']),
-            final_score = safe_float(row['Final_Score']),
-            assignments_avg = safe_float(row['Assignments_Avg']),
-            quizzes_avg = safe_float(row['Quizzes_Avg']),
-            participation_score = safe_float(row['Participation_Score']),
-            projects_score = safe_float(row['Projects_Score']),
-            total_score = safe_float(row['Total_Score']),
-            grade = row['Grade'],
-            study_hours_week = safe_float(row['Study_Hours_per_Week']),
-            extracurricular = row['Extracurricular_Activities'],
-            internet_access = row['Internet_Access_at_Home'],
-            parent_education = row['Parent_Education_Level'],
-            family_income = row['Family_Income_Level'],
-            stress_level = safe_int(row['Stress_Level (1-10)']),
-            sleep_hours_night = safe_float(row['Sleep_Hours_per_Night'])
-        )
-        db.add(student)
-        count += 1
+        # 1. ISI COURSES & ACTIVITIES
+        print("🏗️  Membuat Courses dan Default Activities...")
+        course_map = {} 
         
-        if count % 100 == 0:
-            print(f"   > {count} data masuk...")
+        for data in DEFAULT_COURSES_WITH_ACTIVITIES:
+            activities_data = data.pop("activities") 
+            new_course = CourseModel(**data) 
+            db.add(new_course)
+            db.commit()
+            db.refresh(new_course)
+            course_map[new_course.department] = new_course.id 
+            
+            for act in activities_data:
+                new_activity = ActivityModel(
+                    name=act["name"],
+                    type=act["type"],
+                    course_id=new_course.id
+                )
+                db.add(new_activity)
+        db.commit()
 
-    db.commit()
-    print(f"🎉 SUKSES BESAR! {count} data telah masuk ke database.")
+        # 3. IMPORT MAHASISWA & SIMULASI DATA
+        print(f"📂 Import Mahasiswa & Generating Mock Data...")
+        df = pd.read_csv(csv_file_path)
+        
+        # Cleaning Data Standard
+        df.columns = [c.strip().replace(' ', '_').replace('(', '').replace(')', '').replace('%', '').lower() for c in df.columns]
+        cols_drop = ['email', 'parent_education_level', 'family_income_level', 'sleep_hours_per_night']
+        df.drop(columns=[c for c in cols_drop if c in df.columns], inplace=True)
+        if 'attendance_' in df.columns: df = df[df['attendance_'] > 70]
+        if 'first_name' in df.columns and 'last_name' in df.columns:
+            df['full_name'] = df['first_name'] + ' ' + df['last_name']
+            df.drop(columns=['first_name', 'last_name'], inplace=True)
 
-except FileNotFoundError:
-    print(f"❌ File CSV '{csv_file}' tidak ditemukan di folder ini.")
-except Exception as e:
-    print(f"❌ ERROR SAAT IMPORT: {e}")
-    db.rollback()
-finally:
-    db.close()
+        # --- LOGIKA BARU: SIMULASI CAMPURAN (MIXED DATA) ---
+        # Kita akan memanipulasi dataframe sebelum masuk DB
+        
+        for index, row in df.iterrows():
+            # 40% Peluang Mahasiswa sudah Lulus (Completed)
+            is_graduated = random.random() < 0.4 
+            
+            if is_graduated:
+                # Generate Nilai Acak yang Masuk Akal (50 - 100)
+                simulated_score = round(random.uniform(50, 100), 2)
+                simulated_grade = calculate_grade(simulated_score)
+                
+                df.at[index, 'total_score'] = simulated_score
+                df.at[index, 'grade'] = simulated_grade
+                df.at[index, 'attendance_'] = round(random.uniform(75, 100), 2)
+            else:
+                # 60% Mahasiswa Masih Baru (In Progress)
+                df.at[index, 'total_score'] = 0.0
+                df.at[index, 'grade'] = None # Akan jadi 'In Progress' di API
+                df.at[index, 'attendance_'] = 0.0
+
+        # Simpan Student Profile ke DB
+        df.to_sql(name=table_name, con=engine, if_exists='replace', index=False)
+
+        # 4. AUTO ENROLL & SYNC STATUS
+        print("   -> Auto Enroll & Sync Progress...")
+        students = db.query(StudentModel).all()
+        enrollments = []
+        
+        for s in students:
+            if s.department in course_map:
+                c_id = course_map[s.department]
+                
+                # Cek Profile Mahasiswa tadi, apakah dia 'graduated' atau tidak?
+                # Jika grade ada isinya (A/B/C), berarti completed
+                if s.grade is not None:
+                    enrollments.append(EnrollmentModel(
+                        student_id=s.student_id, 
+                        course_id=c_id, 
+                        progress=100.0,           # Full
+                        is_completed=True,        # Selesai
+                        final_score=s.total_score, # Ambil nilai simulasi
+                        grade=s.grade             # Ambil grade simulasi
+                    ))
+                else:
+                    # Jika grade None, berarti mahasiswa baru
+                    enrollments.append(EnrollmentModel(
+                        student_id=s.student_id, 
+                        course_id=c_id, 
+                        progress=0.0,             # Nol
+                        is_completed=False,
+                        final_score=None,
+                        grade=None
+                    ))
+        
+        if enrollments:
+            db.add_all(enrollments)
+            db.commit()
+
+        db.close()
+        print("🎉 Database Siap! Data sudah dicampur (40% Completed, 60% In Progress) agar terlihat realistis.")
+
+    except Exception as e:
+        print(f"❌ Error: {e}")
+
+if __name__ == "__main__":
+    fix_database_and_import()

@@ -1,17 +1,29 @@
 from fastapi import FastAPI
-from database import Base, engine
-from modules.students.routes import read_students
+import uvicorn
 
-# Buat tabel di database jika belum ada
-Base.metadata.create_all(bind=engine)
+# Import Routes
+from modules.students import routes as student_routes
+from modules.courses import routes as course_routes
+from modules.activities import routes as activity_routes
+from modules.interaction_logs import routes as tracking_routes
+from modules.interaction_logs import analytics
 
-# --- BAGIAN PENTING (JANGAN DIHAPUS) ---
-app = FastAPI()
-# ---------------------------------------
+app = FastAPI(
+    title="E-Learning Activity Tracker API",
+    description="Project 3: With Progress Tracking (No Auth)",
+    version="3.1.0"
+)
 
-# Hubungkan route siswa ke aplikasi utama
-app.include_router(read_students.router)
+# Register Routers
+app.include_router(student_routes.router, prefix="/students", tags=["Students & Enrollment"])
+app.include_router(course_routes.router, prefix="/courses", tags=["Courses"])
+app.include_router(activity_routes.router, prefix="/activities", tags=["Activities (Master Data)"])
+app.include_router(tracking_routes.router, prefix="/logs", tags=["Interaction Logs (Start/Stop)"])
+app.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 
 @app.get("/")
 def root():
-    return {"message": "Server Berjalan! Buka http://127.0.0.1:8000/docs untuk tes API."}
+    return {"message": "API Ready. Documentation at /docs"}
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
