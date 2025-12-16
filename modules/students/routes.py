@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey
-from pydantic import BaseModel, Field # Pastikan import Field ada
-from typing import List, Optional
+from pydantic import BaseModel, Field, field_validator # <-- Tambah field_validator
+from typing import List, Optional, Union
 from datetime import datetime
 from database import get_db, Base, engine
 
@@ -20,7 +20,9 @@ class StudentModel(Base):
     department = Column(String(100))
     attendance_ = Column(Float)
     total_score = Column(Float)
-    grade = Column(String(5))
+    
+    # Boleh Null (None) di Database
+    grade = Column(String(50), nullable=True) 
 
 class EnrollmentModel(Base):
     __tablename__ = "enrollments"
@@ -31,6 +33,10 @@ class EnrollmentModel(Base):
     progress = Column(Float, default=0.0)      
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime, nullable=True)
+    
+    # Kolom Nilai Akhir Mata Kuliah
+    final_score = Column(Float, nullable=True) 
+    grade = Column(String(50), nullable=True) # A, B, C, atau In Progress
 
 Base.metadata.create_all(bind=engine)
 
@@ -43,7 +49,16 @@ class StudentBase(BaseModel):
 
 class StudentResponse(StudentBase):
     student_id: str
-    grade: Optional[str] = None
+    # Grade bisa string panjang sekarang ("In Progress...")
+    grade: Optional[str] = None 
+    
+    # VALIDATOR: Mengubah tampilan Grade jika None
+    @field_validator('grade', mode='before')
+    def set_grade_message(cls, v):
+        if v is None:
+            return "In Progress (Semester Baru)"
+        return v
+
     class Config:
         from_attributes = True
 
@@ -51,13 +66,24 @@ class EnrollRequest(BaseModel):
     course_id: int
 
 class EnrollResponse(BaseModel):
-    # UPDATE: Menggunakan alias 'enrollment_id'
     enrollment_id: int = Field(serialization_alias="enrollment_id")
-    
     student_id: str
     course_id: int
     progress: float
     is_completed: bool
+    
+    # Tambahan: Grade per mata kuliah
+    grade: Optional[str] = None
+    final_score: Optional[float] = None
+
+    # VALIDATOR: Logika "Message Tertentu"
+    @field_validator('grade', mode='before')
+    def set_course_status_message(cls, v, info):
+        # Jika grade kosong/None, beri pesan informatif
+        if v is None:
+            return "Course in Progress (Not Completed)"
+        return v
+
     class Config:
         from_attributes = True
 
@@ -87,7 +113,12 @@ def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends
     
     if existing: raise HTTPException(status_code=400, detail="Sudah terdaftar.")
 
-    new_enroll = EnrollmentModel(student_id=student_id, course_id=request.course_id, progress=0.0)
+    new_enroll = EnrollmentModel(
+        student_id=student_id, 
+        course_id=request.course_id, 
+        progress=0.0,
+        grade=None # Grade awal kosong
+    )
     db.add(new_enroll)
     db.commit()
     db.refresh(new_enroll)
@@ -97,17 +128,13 @@ def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends
 def get_my_learning(student_id: str, db: Session = Depends(get_db)):
     return db.query(EnrollmentModel).filter(EnrollmentModel.student_id == student_id).all()
 
-# --- FITUR DROP COURSE (DELETE) ---
+# --- DROP COURSE ---
 @router.delete("/enrollments/{enrollment_id}")
 def drop_course(enrollment_id: int, db: Session = Depends(get_db)):
-    # 1. Cari data enrollment berdasarkan enrollment_id
     enrollment = db.query(EnrollmentModel).filter(EnrollmentModel.enrollment_id == enrollment_id).first()
-
-    # 2. Jika tidak ketemu, beri error 404
     if not enrollment:
         raise HTTPException(status_code=404, detail="Enrollment ID not found")
-
-    # 3. Hapus data dari database
+    
     try:
         db.delete(enrollment)
         db.commit()
