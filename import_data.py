@@ -2,23 +2,25 @@ import pandas as pd
 import random
 from sqlalchemy import create_engine, text
 from database import engine, Base, SessionLocal
-from datetime import datetime
 
 # --- IMPORT MODELS ---
 try:
     from modules.courses.routes import CourseModel
-    from modules.activities.routes import ActivityModel
+    from modules.activities.routes import ActivityModel 
     from modules.interaction_logs.routes import InteractionLogModel
     from modules.students.routes import StudentModel, EnrollmentModel
 except ImportError as e:
     print(f"⚠️ Note: {e}")
 
+# --- KONFIGURASI ---
 csv_file_path = 'data/Students Performance Dataset.csv'
 table_name = 'student_scores'
 
 DEFAULT_COURSES_WITH_ACTIVITIES = [
     {
-        "course_name": "Calculus 1", "department": "Mathematics", "credits": 4,
+        "course_name": "Calculus 1",
+        "department": "Mathematics",
+        "credits": 4,
         "activities": [
             {"name": "Video: Introduction to Limits", "type": "Video"},
             {"name": "Quiz: Derivatives Basic", "type": "Quiz"},
@@ -26,7 +28,9 @@ DEFAULT_COURSES_WITH_ACTIVITIES = [
         ]
     },
     {
-        "course_name": "Data Structures", "department": "CS", "credits": 4,
+        "course_name": "Data Structures",
+        "department": "CS",
+        "credits": 4,
         "activities": [
             {"name": "Video: Linked Lists vs Arrays", "type": "Video"},
             {"name": "Assignment: Build a Binary Tree", "type": "Assignment"},
@@ -34,7 +38,9 @@ DEFAULT_COURSES_WITH_ACTIVITIES = [
         ]
     },
     {
-        "course_name": "Macroeconomics", "department": "Business", "credits": 3,
+        "course_name": "Macroeconomics",
+        "department": "Business",
+        "credits": 3,
         "activities": [
             {"name": "Lecture: Supply and Demand", "type": "Lecture"},
             {"name": "Case Study: Market Failures", "type": "Assignment"},
@@ -42,7 +48,9 @@ DEFAULT_COURSES_WITH_ACTIVITIES = [
         ]
     },
     {
-        "course_name": "Physics 101", "department": "Engineering", "credits": 4,
+        "course_name": "Physics 101", 
+        "department": "Engineering",
+        "credits": 4,
         "activities": [
             {"name": "Lab: Newton's Laws", "type": "Lab"},
             {"name": "Simulation: Projectile Motion", "type": "Interactive"},
@@ -51,6 +59,7 @@ DEFAULT_COURSES_WITH_ACTIVITIES = [
     },
 ]
 
+# Helper: Tentukan Grade berdasarkan Score
 def calculate_grade(score):
     if score >= 85: return "A"
     elif score >= 70: return "B"
@@ -60,83 +69,117 @@ def calculate_grade(score):
 
 def fix_database_and_import():
     try:
-        print("🔄 Menghubungkan ke MySQL & Resetting tables...")
+        print("🔄 Menghubungkan ke MySQL...")
         with engine.connect() as conn:
-            conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
-            tables = ["certificates", "enrollments", "interaction_logs", "activities", "courses"]
-            for t in tables:
-                conn.execute(text(f"DROP TABLE IF EXISTS {t}"))
-            conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+            # RESET DB
+            conn.execute(text("DROP TABLE IF EXISTS certificates"))
+            conn.execute(text("DROP TABLE IF EXISTS enrollments"))
+            conn.execute(text("DROP TABLE IF EXISTS interaction_logs"))
+            conn.execute(text("DROP TABLE IF EXISTS activity_logs"))
+            conn.execute(text("DROP TABLE IF EXISTS activities"))
+            conn.execute(text("DROP TABLE IF EXISTS courses"))
             conn.commit()
 
-        print("🏗️ Membuat tabel baru...")
+        print("🏗️  Membuat tabel baru...")
         Base.metadata.create_all(bind=engine)
         db = SessionLocal()
 
-        print("🏗️ Membuat Courses dan Activities...")
-        course_map = {}
+        # 1. ISI COURSES & ACTIVITIES
+        print("🏗️  Membuat Courses dan Default Activities...")
+        course_map = {} 
+        
         for data in DEFAULT_COURSES_WITH_ACTIVITIES:
-            acts = data.pop("activities")
-            new_course = CourseModel(**data)
+            activities_data = data.pop("activities") 
+            new_course = CourseModel(**data) 
             db.add(new_course)
             db.commit()
             db.refresh(new_course)
-            course_map[new_course.department] = new_course.id
+            course_map[new_course.department] = new_course.id 
             
-            for act in acts:
-                db.add(ActivityModel(name=act["name"], type=act["type"], course_id=new_course.id))
+            for act in activities_data:
+                new_activity = ActivityModel(
+                    name=act["name"],
+                    type=act["type"],
+                    course_id=new_course.id
+                )
+                db.add(new_activity)
         db.commit()
 
-        print("📂 Import Mahasiswa & Generating Mock Logs...")
+        # 3. IMPORT MAHASISWA & SIMULASI DATA
+        print(f"📂 Import Mahasiswa & Generating Mock Data...")
         df = pd.read_csv(csv_file_path)
-        df.columns = [c.strip().replace(' ', '_').lower() for c in df.columns]
+        
+        # Cleaning Data Standard
+        df.columns = [c.strip().replace(' ', '_').replace('(', '').replace(')', '').replace('%', '').lower() for c in df.columns]
+        cols_drop = ['email', 'parent_education_level', 'family_income_level', 'sleep_hours_per_night']
+        df.drop(columns=[c for c in cols_drop if c in df.columns], inplace=True)
+        if 'attendance_' in df.columns: df = df[df['attendance_'] > 70]
         if 'first_name' in df.columns and 'last_name' in df.columns:
             df['full_name'] = df['first_name'] + ' ' + df['last_name']
+            df.drop(columns=['first_name', 'last_name'], inplace=True)
+
+        # --- LOGIKA BARU: SIMULASI CAMPURAN (MIXED DATA) ---
+        # Kita akan memanipulasi dataframe sebelum masuk DB
         
-        # Simpan profile dasar ke MySQL
+        for index, row in df.iterrows():
+            # 40% Peluang Mahasiswa sudah Lulus (Completed)
+            is_graduated = random.random() < 0.4 
+            
+            if is_graduated:
+                # Generate Nilai Acak yang Masuk Akal (50 - 100)
+                simulated_score = round(random.uniform(50, 100), 2)
+                simulated_grade = calculate_grade(simulated_score)
+                
+                df.at[index, 'total_score'] = simulated_score
+                df.at[index, 'grade'] = simulated_grade
+                df.at[index, 'attendance_'] = round(random.uniform(75, 100), 2)
+            else:
+                # 60% Mahasiswa Masih Baru (In Progress)
+                df.at[index, 'total_score'] = 0.0
+                df.at[index, 'grade'] = None # Akan jadi 'In Progress' di API
+                df.at[index, 'attendance_'] = 0.0
+
+        # Simpan Student Profile ke DB
         df.to_sql(name=table_name, con=engine, if_exists='replace', index=False)
 
+        # 4. AUTO ENROLL & SYNC STATUS
+        print("   -> Auto Enroll & Sync Progress...")
         students = db.query(StudentModel).all()
         enrollments = []
-
+        
         for s in students:
             if s.department in course_map:
                 c_id = course_map[s.department]
-                is_graduated = random.random() < 0.4 # 40% sudah lulus
-
-                if is_graduated:
-                    # Ambil aktivitas matkul ini untuk buat log
-                    course_acts = db.query(ActivityModel).filter(ActivityModel.course_id == c_id).all()
-                    scores_for_avg = []
-                    
-                    for act in course_acts:
-                        score_val = None
-                        # Video tidak ada skor
-                        if act.type.lower() not in ["video", "lecture", "forum"]:
-                            score_val = round(random.uniform(65, 100), 2)
-                            scores_for_avg.append(score_val)
-                        
-                        db.add(InteractionLogModel(
-                            student_id=s.student_id, activity_id=act.id,
-                            start_time=datetime.now(), end_time=datetime.now(),
-                            status="completed", score=score_val
-                        ))
-                    
-                    final_avg = sum(scores_for_avg) / len(scores_for_avg) if scores_for_avg else 0
+                
+                # Cek Profile Mahasiswa tadi, apakah dia 'graduated' atau tidak?
+                # Jika grade ada isinya (A/B/C), berarti completed
+                if s.grade is not None:
                     enrollments.append(EnrollmentModel(
-                        student_id=s.student_id, course_id=c_id, progress=100.0,
-                        is_completed=True, final_score=final_avg, grade=calculate_grade(final_avg)
+                        student_id=s.student_id, 
+                        course_id=c_id, 
+                        progress=100.0,           # Full
+                        is_completed=True,        # Selesai
+                        final_score=s.total_score, # Ambil nilai simulasi
+                        grade=s.grade             # Ambil grade simulasi
                     ))
                 else:
+                    # Jika grade None, berarti mahasiswa baru
                     enrollments.append(EnrollmentModel(
-                        student_id=s.student_id, course_id=c_id, progress=0.0,
-                        is_completed=False, final_score=None, grade=None
+                        student_id=s.student_id, 
+                        course_id=c_id, 
+                        progress=0.0,             # Nol
+                        is_completed=False,
+                        final_score=None,
+                        grade=None
                     ))
         
-        db.add_all(enrollments)
-        db.commit()
+        if enrollments:
+            db.add_all(enrollments)
+            db.commit()
+
         db.close()
-        print("🎉 Selesai! Data log dan rata-rata nilai telah disinkronkan.")
+        print("🎉 Database Siap! Data sudah dicampur (40% Completed, 60% In Progress) agar terlihat realistis.")
+
     except Exception as e:
         print(f"❌ Error: {e}")
 
