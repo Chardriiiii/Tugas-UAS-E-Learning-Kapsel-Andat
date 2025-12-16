@@ -1,5 +1,3 @@
-# database/models.py
-
 from sqlalchemy import Column, Integer, String, Float, Enum
 from database.database import Base # Impor absolut
 

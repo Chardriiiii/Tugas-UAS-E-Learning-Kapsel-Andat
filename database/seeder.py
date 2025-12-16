@@ -1,5 +1,3 @@
-# database/seeder.py
-
 import csv
 import os
 from sqlalchemy.orm import Session

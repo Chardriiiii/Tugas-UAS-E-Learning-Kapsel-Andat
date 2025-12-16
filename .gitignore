@@ -1,9 +1,4 @@
-# .gitignore
-
-# File Environment
-.env
-
-# Cache Python
-__pycache__/
+.venv/
+__pycache__
 *.pyc
-.pytest_cache/
+.env

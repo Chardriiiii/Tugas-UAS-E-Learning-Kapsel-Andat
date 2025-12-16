@@ -1,57 +1,29 @@
+from fastapi import FastAPI
+import uvicorn
 
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy.orm import Session
-from database.database import get_db
-from database.models import StudentPerformance
-from typing import List
+# Import Routes
+from modules.students import routes as student_routes
+from modules.courses import routes as course_routes
+from modules.activities import routes as activity_routes
+from modules.interaction_logs import routes as tracking_routes
+from modules.interaction_logs import analytics
 
-# Definisi Pydantic Schema (Opsional, tapi penting untuk FastAPI)
-from pydantic import BaseModel
+app = FastAPI(
+    title="E-Learning Activity Tracker API",
+    description="Project 3: With Progress Tracking (No Auth)",
+    version="3.1.0"
+)
 
-class StudentBase(BaseModel):
-    # Struktur data yang sama dengan Model Anda
-    Student_ID: str
-    First_Name: str
-    Last_Name: str
-    Email: str
-    Gender: str
-    Age: int
-    Department: str
-    # Perhatikan nama field di Pydantic harus sesuai dengan atribut Python (tanpa karakter khusus)
-    Attendance_Percentage: float
-    Midterm_Score: float
-    Final_Score: float
-    # ... (lanjutkan semua field lainnya)
-    
-    class Config:
-        orm_mode = True # Penting agar Pydantic bisa membaca data dari objek ORM SQLAlchemy
-
-
-app = FastAPI()
-
-# --- ENDPOINTS API ---
+# Register Routers
+app.include_router(student_routes.router, prefix="/students", tags=["Students & Enrollment"])
+app.include_router(course_routes.router, prefix="/courses", tags=["Courses"])
+app.include_router(activity_routes.router, prefix="/activities", tags=["Activities (Master Data)"])
+app.include_router(tracking_routes.router, prefix="/logs", tags=["Interaction Logs (Start/Stop)"])
+app.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 
 @app.get("/")
-def home():
-    return {"message": "Server FastAPI berjalan"}
+def root():
+    return {"message": "API Ready. Documentation at /docs"}
 
-@app.get("/students/", response_model=List[StudentBase])
-def get_all_students(db: Session = Depends(get_db), skip: int = 0, limit: int = 100):
-    """
-    Mengambil daftar siswa dari database.
-    """
-    students = db.query(StudentPerformance).offset(skip).limit(limit).all()
-    if not students:
-        raise HTTPException(status_code=404, detail="Tidak ada data siswa ditemukan")
-        
-    return students
-
-@app.get("/students/{student_id}", response_model=StudentBase)
-def get_student_by_id(student_id: str, db: Session = Depends(get_db)):
-    """
-    Mengambil detail siswa berdasarkan ID.
-    """
-    student = db.query(StudentPerformance).filter(StudentPerformance.Student_ID == student_id).first()
-    if student is None:
-        raise HTTPException(status_code=404, detail="Siswa tidak ditemukan")
-    return student
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
