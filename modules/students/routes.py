@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, func # <--- TAMBAH func
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, func 
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
 from database import get_db, Base, engine
 
-from modules.courses.routes import CourseModel
+# Import Model Course dan Prerequisite
+from modules.courses.routes import CourseModel, PrerequisiteModel
 
 router = APIRouter()
 
@@ -112,7 +113,7 @@ def read_student(student_id: str, db: Session = Depends(get_db)):
     response.enrollments = my_enrollments
     return response
 
-# --- UPDATE PENTING DI SINI ---
+# --- UPDATE PENTING DI SINI (LOGIKA PRASYARAT) ---
 @router.post("/{student_id}/enroll", response_model=EnrollResponse)
 def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends(get_db)):
     # 1. Cek Mahasiswa
@@ -123,24 +124,46 @@ def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends
     course = db.query(CourseModel).filter(CourseModel.id == request.course_id).first()
     if not course: raise HTTPException(status_code=404, detail="Mata kuliah tidak ditemukan")
 
+    # =========================================================
+    # 🆕 LOGIKA BARU: CEK PRASYARAT (PREREQUISITE CHECK)
+    # =========================================================
+    
+    # Cek apakah mata kuliah ini punya syarat?
+    prereq_rule = db.query(PrerequisiteModel).filter(PrerequisiteModel.course_id == request.course_id).first()
+    
+    if prereq_rule:
+        required_course_id = prereq_rule.prereq_id
+        
+        # Cek apakah mahasiswa SUDAH LULUS mata kuliah syarat tersebut
+        # Syarat Lulus: Ada di enrollment history DAN is_completed = True
+        has_passed = db.query(EnrollmentModel).filter(
+            EnrollmentModel.student_id == student_id,
+            EnrollmentModel.course_id == required_course_id,
+            EnrollmentModel.is_completed == True 
+        ).first()
+
+        if not has_passed:
+            # Ambil nama matkul syarat untuk pesan error yang jelas
+            prereq_name = db.query(CourseModel).filter(CourseModel.id == required_course_id).first().course_name
+            raise HTTPException(
+                status_code=400, 
+                detail=f"⛔ Gagal Enroll: Anda belum lulus mata kuliah prasyarat: {prereq_name}"
+            )
+    # =========================================================
+
     # 3. Cek Duplikasi
     existing = db.query(EnrollmentModel).filter(
         EnrollmentModel.student_id == student_id, EnrollmentModel.course_id == request.course_id
     ).first()
     if existing: raise HTTPException(status_code=400, detail="Sudah terdaftar di mata kuliah ini.")
 
-    # ---------------------------------------------------------
-    # 4. LOGIKA BARU: VALIDASI SKS (MAX 24)
-    # ---------------------------------------------------------
-    
-    # Hitung total SKS yang SUDAH diambil di semester ini ("Ganjil 2025")
-    # Kita melakukan JOIN antara tabel Enrollment dan Course untuk menjumlahkan credits
+    # 4. Validasi SKS (Max 24)
     current_credits = db.query(func.sum(CourseModel.credits))\
         .join(EnrollmentModel, CourseModel.id == EnrollmentModel.course_id)\
         .filter(
             EnrollmentModel.student_id == student_id,
-            EnrollmentModel.semester == "Ganjil 2025" # Sesuaikan jika semester dinamis
-        ).scalar() or 0 # Jika belum ada matkul, return 0
+            EnrollmentModel.semester == "Ganjil 2025" 
+        ).scalar() or 0
     
     projected_credits = current_credits + course.credits
 
@@ -149,8 +172,6 @@ def enroll_course(student_id: str, request: EnrollRequest, db: Session = Depends
             status_code=400, 
             detail=f"Gagal Enroll: Batas SKS terlampaui (Max 24). Total Anda: {current_credits}, Ditambah: {course.credits} = {projected_credits}."
         )
-
-    # ---------------------------------------------------------
 
     # 5. Simpan Enrollment
     new_enroll = EnrollmentModel(
